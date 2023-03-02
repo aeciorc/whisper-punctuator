@@ -168,19 +168,13 @@ def create_records(
 
 def read_json(path: str) -> List[Record]:
     records = []
-    with open(path) as f:
-        for line in f:
-            data = json.loads(line)
-            records.append(Record(audio_path=data["audio_path"], text=data["text"]))
+    for data in json.read(open(path,'r')):
+        records.append(Record(audio_path=data["audio_path"], text=data["text"]))
     return records
 
 
 def write_json(records: List[Record], output: str):
-    with open(output, "w") as f:
-        for record in records:
-            data = {"audio_path": record.audio_path, "text": record.text}
-            f.write(json.dumps(data, ensure_ascii=False) + "\n")
-
+    json.dump([{"audio_path": record.audio_path, "text": record.text} for record in records], open(output,'w+'))
 
 def main():
     args = get_parser().parse_args()
