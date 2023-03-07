@@ -242,7 +242,7 @@ def main():
             tqdm.write(f"  Original:   {record.text}")
             tqdm.write(f"  Punctuated: {punctuated_text}")
         
-
+ 
         if (index+1)%100==0:
             write_json(punctuated_records[-100:], f"{args.output}.{index}")
         index+=1
