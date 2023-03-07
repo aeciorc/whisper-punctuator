@@ -21,6 +21,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json", type=str, help="Path to a jsonl file containing audio paths and texts"
     )
+    parser.add_argument("--start-idx", type=int, default=0, help="Starting index, in case of interruptions")
     parser.add_argument(
         "--punctuations", type=str, default=",.?", help="List of punctuations to insert"
     )
@@ -118,6 +119,7 @@ def get_parser() -> argparse.ArgumentParser:
 class Record:
     audio_path: str
     text: str
+    mel: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
 
 
 class AudioDataset(Dataset):
@@ -127,14 +129,41 @@ class AudioDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.records)
-
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        record = self.records[index]
+    
+    def get_mel(self,record: Record) -> Tuple[torch.Tensor, torch.Tensor]:
         mel = log_mel_spectrogram(record.audio_path)
         mel = pad_or_trim(mel, N_FRAMES)
         if self.fp16:
             mel = mel.half()
         return mel
+      
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        record = self.records[index]
+        return self.get_mel(record)
+     
+
+class MemoryAudioDataset(Dataset):
+    def __init__(self, records: List[Record], fp16: bool = True) -> None:
+        self.records = records
+        self.fp16 = fp16
+        for record in self.records:
+          record.mel = self.get_mel(record)
+    
+    def get_mel(self,record: Record) -> Tuple[torch.Tensor, torch.Tensor]:
+        mel = log_mel_spectrogram(record.audio_path)
+        mel = pad_or_trim(mel, N_FRAMES)
+        if self.fp16:
+            mel = mel.half()
+        return mel
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        record = self.records[index]
+        return record.mel
+
 
 
 def get_dataloader(records: List[Record], batch_size: int = 1, fp16: bool = True) -> DataLoader:
@@ -163,12 +192,13 @@ def create_records(
             Record(record.audio_path, unicodedata.normalize("NFKC", record.text))
             for record in records
         ]
+    
     return records
 
 
 def read_json(path: str) -> List[Record]:
     records = []
-    for data in json.read(open(path,'r')):
+    for data in json.load(open(path,'r')):
         records.append(Record(audio_path=data["audio_path"], text=data["text"]))
     return records
 
@@ -197,20 +227,27 @@ def main():
     )
 
     # We currently only support batch size 1
-    data_loader = get_dataloader(records, batch_size=1, fp16=args.device == "cuda")
-
+    data_loader = get_dataloader(records[args.start_idx:], batch_size=1, fp16=args.device == "cuda")
+    
     punctuated_records = []
-    for record, mel in tqdm(zip(records, data_loader), total=len(records)):
+    for record, mel in tqdm(zip(records[args.start_idx:], data_loader), total=len(records)):
+        index=args.start_idx
         mel = mel.to(args.device)
         punctuated_text = punctuator.punctuate(audio=mel, text=record.text)
         punctuated_records.append(Record(record.audio_path, punctuated_text))
+        
 
         if args.verbose:
             tqdm.write(record.audio_path)
             tqdm.write(f"  Original:   {record.text}")
             tqdm.write(f"  Punctuated: {punctuated_text}")
+        
 
-    write_json(punctuated_records, args.output)
+        if (index+1)%100==0:
+            write_json(punctuated_records[-100:], f"{args.output}.{index}")
+        index+=1
+    
+    write_json(punctuated_records, f"{args.output}")
 
 
 if __name__ == "__main__":
